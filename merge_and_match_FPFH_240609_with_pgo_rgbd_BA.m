@@ -35,9 +35,9 @@ intrinsic = [3185.911844744719, 0, 155.1916697660703;
 %                          0, 1, 0, 0;
 %                          0, 0, 1, 0;
 %                          0, 0, 0, 1];
-intrinsic = intrinsic * [1, 0, 0;
-                         0, -1, 0;
-                         0, 0, 1];
+% intrinsic = intrinsic * [1, 0, 0;
+%                          0, 1, 0;
+%                          0, 0, 1];
 
 
 DLP_pos = [0.0687758 , -10.6702 , 111.014];
@@ -246,33 +246,51 @@ for scene_num = 3:3
 
             % copy point cloud for depth map
 
-            pc2d = pctransform(ori_scan, invert(extrinsic_tform));
-            % pc2d = pctransform(ori_scan, extrinsic_tform);
-            pc2d_xyz = pc2d.Location;
+            % pc2d = pctransform(ori_scan, invert(extrinsic_tform));
+            pc2d = pctransform(ori_scan, extrinsic_tform);
+            pc2d_xyz_v1 = pc2d.Location;
 
             % pc2d_xyz = pc2d_xyz - Cam_pos;
 
-            pc2d_xyz = pc2d_xyz ./ pc2d_xyz(:, 3);
-            pc2d_xyz = pc2d_xyz * intrinsic;
+            pc2d_xyz_v2 = pc2d_xyz_v1 ./ pc2d_xyz_v1(:, 3);
+            pc2d_xyz_v3 = pc2d_xyz_v2 * intrinsic';
             % pc2d_xyz = intrinsic * pc2d_xyz';
             % depth_image = zeros(480, 400, 1, 'uint8');
-            depth_image = zeros(700, 700, 1, 'uint8');
-            for ii = 1:size(pc2d_xyz, 1)
-                x = (pc2d_xyz(ii, 1));
-                y = (pc2d_xyz(ii, 2));
-                if x > 0 && x <= 700 && y > 0 && y <= 700
+            depth_image = zeros(480, 400, 'uint8');
+            for ii = 1:size(pc2d_xyz_v3, 1)
+                x = (pc2d_xyz_v3(ii, 1));
+                y = (pc2d_xyz_v3(ii, 2));
+                if x > 0 && x <= 400 && y > 0 && y <= 480
                     % depth_image(y, x, :) = rgbd(ii, 1:3);
                     % cast to int
-                    depth_image(int32(y)+1, int32(x)+1, :) = uint8( (pc2d.Location(ii, 3) + 12.7) * 10);
+                    depth_image(int32(y), int32(x)) = uint8( (ori_scan.Location(ii, 3) + 12.7) * 10);
                     % depth_image(int32(y)+1, int32(x)+1, :) = 255;
                 end
             end
+            % flip x and y
+            depth_image = flip(depth_image, 1);
+            depth_image = flip(depth_image, 2);
             imshow(depth_image);
-            figure();
-            imshow(depth_image);
+            dense_depth = rgbd(:, :, 4);
 
-            % select valid points
-            scans{i+k} = select(scans{i+k}, valid_points);
+            depth_mask = (depth_image ~= 0) & (dense_depth ~= 0);
+            detph_diff = depth_image(depth_mask) - dense_depth(depth_mask);
+            mean(abs(detph_diff));
+
+            % create fpfh_image
+            fpfh_image = zeros(480, 400, 'double');
+            for ii = 1:size(pc2d_xyz_v3, 1)
+                x = (pc2d_xyz_v3(ii, 1));
+                y = (pc2d_xyz_v3(ii, 2));
+                if x > 0 && x <= 400 && y > 0 && y <= 480
+                    fpfh_image(int32(y), int32(x)) = fpfh_features(ii);
+                end
+            end
+            fpfh_image = flip(fpfh_image, 1);
+            fpfh_image = flip(fpfh_image, 2);
+
+            % select fpfh feature
+            fpfh_features = fpfh_features(valid_points.Location(:, 2), valid_points.Location(:, 1)); % fix from here
 
             % features = fpfh_features + rgb_features;
             features = rgb_features;
