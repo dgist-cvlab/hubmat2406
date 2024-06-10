@@ -11,6 +11,43 @@ USE_RANSAC = 0;
 ori_datafolder = "Dgist-RGBD_data";
 ori_datafolder = "C:\hubitz\Dgist_Data\Dgist-RGBD";
 
+FPFH_Radius = 2.0; %휴비츠 사용 파라미터 = 2.5mm (voel x5)
+extrinsic = [ -0.98899  ,  -0.089323,   0.117987,    1.77684; 
+              -0.0757705,   0.990501,   0.114744,   -1.14249; 
+              -0.127115 ,   0.10454 ,  -0.986364,    118.118; 
+                      0,         0,          0,         1];
+intrinsic = [3185.911844744719, 0, 155.1916697660703;
+            0, 3185.407534438759, 266.3372961029765;
+            0, 0, 1];
+
+% extrinsic = [ 
+%        0.990501,  -0.0757705,  0.114744,   -1.14249; 
+%       -0.089323,  -0.98899  ,  0.117987,    1.77684; 
+%       0.10454 ,  -0.127115 , -0.986364,    118.118; 
+%       0,         0,          0,         1];
+% intrinsic = [
+%     3185.407534438759, 0,                 266.3372961029765;
+%     0,                 3185.911844744719, 155.1916697660703;
+%     0, 0, 1];
+
+% inverse y axis
+% extrinsic = extrinsic * [1, 0, 0, 0;
+%                          0, 1, 0, 0;
+%                          0, 0, 1, 0;
+%                          0, 0, 0, 1];
+intrinsic = intrinsic * [1, 0, 0;
+                         0, -1, 0;
+                         0, 0, 1];
+
+
+DLP_pos = [0.0687758 , -10.6702 , 111.014];
+Cam_pos = [16.6476 , -9.91588 , 116.537];
+
+R_ext = extrinsic(1:3,1:3);
+t_ext = extrinsic(1:3,4);
+R_ext = eul2rotm(rotm2eul(R_ext));
+extrinsic_tform = rigidtform3d(R_ext, t_ext);
+
 for scene_num = 3:3
     if scene_num == 1
         scene_name = "Dgist-RGBD_1";
@@ -174,6 +211,8 @@ for scene_num = 3:3
     % 피처 추출 및 매칭
     all_features = cell(1, 10);
     all_valid_points = cell(1, 10);
+    all_fpfh_feat = cell(1, 10);
+    all_rgb_feat = cell(1, 10);
     numMatches=2;
     lineWidth=1;
     markerSize=10;
@@ -181,13 +220,66 @@ for scene_num = 3:3
     for i = 690:step:length(scans)
         % 피처 추출
         for k = 1:4
+            if i+k > length(scans)
+                break;
+            end
             rgbd = imgs{i+k};  % 여기서 k를 i+k로 변경
+
+            % compute 2D features
             rgb = rgbd(:, :, 1:3);
             grayImage = rgb2gray(rgb);
             points = detectSURFFeatures(grayImage);
-            [features, valid_points] = extractFeatures(grayImage, points);
+            [rgb_features, valid_points] = extractFeatures(grayImage, points);
+            
+            % compute 3D features
+            % swap x and y
+
+            % pc_work = scans{i+k};
+            pc_work = scans{i+k};
+
+            % inverse y axis
+            % pc_work(:, 1) = -pc_work(:, 1);
+
+            ori_scan = pointCloud(pc_work);
+            % fpfh_features = computeFPFHFeatures(ori_scan, Radius=FPFH_Radius);
+            fpfh_features = extractFPFHFeatures(ori_scan, Radius=FPFH_Radius);
+
+            % copy point cloud for depth map
+
+            pc2d = pctransform(ori_scan, invert(extrinsic_tform));
+            % pc2d = pctransform(ori_scan, extrinsic_tform);
+            pc2d_xyz = pc2d.Location;
+
+            % pc2d_xyz = pc2d_xyz - Cam_pos;
+
+            pc2d_xyz = pc2d_xyz ./ pc2d_xyz(:, 3);
+            pc2d_xyz = pc2d_xyz * intrinsic;
+            % pc2d_xyz = intrinsic * pc2d_xyz';
+            % depth_image = zeros(480, 400, 1, 'uint8');
+            depth_image = zeros(700, 700, 1, 'uint8');
+            for ii = 1:size(pc2d_xyz, 1)
+                x = (pc2d_xyz(ii, 1));
+                y = (pc2d_xyz(ii, 2));
+                if x > 0 && x <= 700 && y > 0 && y <= 700
+                    % depth_image(y, x, :) = rgbd(ii, 1:3);
+                    % cast to int
+                    depth_image(int32(y)+1, int32(x)+1, :) = uint8( (pc2d.Location(ii, 3) + 12.7) * 10);
+                    % depth_image(int32(y)+1, int32(x)+1, :) = 255;
+                end
+            end
+            imshow(depth_image);
+            figure();
+            imshow(depth_image);
+
+            % select valid points
+            scans{i+k} = select(scans{i+k}, valid_points);
+
+            % features = fpfh_features + rgb_features;
+            features = rgb_features;
             all_features{k} = features;
             all_valid_points{k} = valid_points;
+            all_fpfh_feat{k} = fpfh_features;
+            all_rgb_feat{k} = rgb_features;
         end
     
         % 이미지 배치 설정
@@ -203,6 +295,9 @@ for scene_num = 3:3
         combinedImage = zeros(combinedHeight, combinedWidth, 3, 'uint8');
     
         for k = 1:numImages
+            if i+k > length(scans)
+                break;
+            end
             row = floor((k-1) / cols);
             col = mod(k-1, cols);
             startY = row * (imageHeight + gap) + 1;
@@ -281,8 +376,6 @@ for scene_num = 3:3
     for i = 1:step:length(scans)
          combined_pc = pointCloud([0, 0, 0]);
     end
-
-
 
 
     % for i = 1:step:length(scans)
