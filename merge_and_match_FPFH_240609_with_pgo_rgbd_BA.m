@@ -20,6 +20,10 @@ intrinsic = [3185.911844744719, 0, 155.1916697660703;
             0, 3185.407534438759, 266.3372961029765;
             0, 0, 1];
 
+intrinsic_yx = [3185.407534438759, 0, 266.3372961029765;
+                0, 3185.911844744719, 155.1916697660703;
+                0, 0, 1];
+
 % extrinsic = [ 
 %        0.990501,  -0.0757705,  0.114744,   -1.14249; 
 %       -0.089323,  -0.98899  ,  0.117987,    1.77684; 
@@ -236,7 +240,7 @@ for scene_num = 3:3
             % % RGB-D 이미지의 깊이 채널을 가져오기
             % [height, width, ~] = size(rgbd);
             % % RGB-D 이미지의 깊이 채널을 가져오기
-            % % 이미지 크기 정의 (depth_image의 크기)
+            % % 이미지 크기 정의 (depth_proj의 크기)
             % image_height = 480;
             % image_width = 400;
             % 
@@ -319,49 +323,88 @@ for scene_num = 3:3
             pc2d_xyz_v2 = pc2d_xyz_v1 ./ pc2d_xyz_v1(:, 3);
             pc2d_xyz_v3 = pc2d_xyz_v2 * intrinsic';
             % pc2d_xyz = intrinsic * pc2d_xyz';
-            % depth_image = zeros(480, 400, 1, 'uint8');
-            depth_image = zeros(480, 400, 'uint8');
+            % depth_proj = zeros(480, 400, 1, 'uint8');
+            depth_proj = zeros(480, 400, 'uint8');
             for ii = 1:size(pc2d_xyz_v3, 1)
                 x = (pc2d_xyz_v3(ii, 1));
                 y = (pc2d_xyz_v3(ii, 2));
-                if x > 0 && x <= 400 && y > 0 && y <= 480
-                    % depth_image(y, x, :) = rgbd(ii, 1:3);
+                if x > 1 && x <= 400 && y > 1 && y <= 480
+                    % depth_proj(y, x, :) = rgbd(ii, 1:3);
                     % cast to int
-                    depth_image(int32(y), int32(x)) = uint8( (ori_scan.Location(ii, 3) + 12.7) * 10);
-                    % depth_image(int32(y)+1, int32(x)+1, :) = 255;
+                    depth_proj(int32(y), int32(x)) = uint8( (ori_scan.Location(ii, 3) + 12.7) * 10);
+                    % depth_proj(int32(y)+1, int32(x)+1, :) = 255;
                 end
             end
             % flip x and y
-            depth_image = flip(depth_image, 1);
-            depth_image = flip(depth_image, 2);
-            imshow(depth_image); %depth_image = point cloud를 image에 투영한 결과
+            depth_proj = flip(depth_proj, 1);
+            depth_proj = flip(depth_proj, 2);
+            imshow(depth_proj); % depth_proj = point cloud를 image에 투영한 결과
             dense_depth = rgbd(:, :, 4);
 
-            depth_mask = (depth_image ~= 0) & (dense_depth ~= 0);
-            detph_diff = depth_image(depth_mask) - dense_depth(depth_mask);
+            depth_mask = (depth_proj ~= 0) & (dense_depth ~= 0);
+            detph_diff = depth_proj(depth_mask) - dense_depth(depth_mask);
             mean(abs(detph_diff));
 
             % create fpfh_image
-            fpfh_image = zeros(480, 400, 'double');
+            fpfh_image = zeros(480, 400, 33, 'double');
             for ii = 1:size(pc2d_xyz_v3, 1)
                 x = (pc2d_xyz_v3(ii, 1));
                 y = (pc2d_xyz_v3(ii, 2));
-                if x > 0 && x <= 400 && y > 0 && y <= 480
-                    fpfh_image(int32(y), int32(x)) = fpfh_features(ii);
+                if x > 1 && x <= 400 && y > 1 && y <= 480
+                    fpfh_image(int32(y), int32(x),:) = fpfh_features(ii,:);
                 end
             end
             fpfh_image = flip(fpfh_image, 1);
             fpfh_image = flip(fpfh_image, 2);
 
 
+            % convert dense_depth into 3D points
+            dense_depth_flipped = flip(dense_depth, 1);
+            dense_depth_flipped = flip(dense_depth_flipped, 2);
+            [x, y] = meshgrid(1:400, 1:480);
 
+            % [x, y] = meshgrid(480:-1:1, 400:-1:1)
+            x = x(:);
+            y = y(:);
+            xy = [y, x];
+            xy_norm_ori = [xy, ones(size(xy, 1), 1)];
+
+            % apply inverse of intrinsic
+            % intrinsic = intrinsic * [1, 0, 0;
+            %                          0, 1, 0;
+            %                          0, 0, 1];
+            xy_norm = double(xy_norm_ori) * inv(intrinsic');
+            xy_norm = xy_norm(:, 1:2);
+            xy_norm = [xy_norm, ones(size(xy_norm, 1), 1)];
+
+            % apply depth
+            % flatten depth for multiplication
+            valid_depth_mask = dense_depth_flipped ~= 0;
+            dense_depth_flat = reshape(dense_depth_flipped, [480*400, 1]);
+            dense_depth_flat = (double(dense_depth_flat) - 127.0) / 10.0;
+            dense_depth_flat = dense_depth_flat + norm(Cam_pos);
+            % stack 3 times
+            % dense_depth_flat = [dense_depth_flat, dense_depth_flat, dense_depth_flat];
+            % xyz_from_depth_img = xy_norm;
+            xyz_from_depth_img = xy_norm .* dense_depth_flat;
+            
+            % create point cloud
+            pc_from_depth_img = pointCloud(xyz_from_depth_img(valid_depth_mask,:));
+            % apply extrinsic
+            % xy_depth = xy_depth * invert(extrinsic_tform)
+            pc_from_depth_img_v2 = pctransform(pc_from_depth_img, invert(extrinsic_tform));
+            pc_from_depth_img_v2_xyz = pc_from_depth_img_v2.Location;
+            % pc_from_depth_img_v2_xyz(:,3) = dense_depth_flat;
+            pc_from_depth_img_v3 = pointCloud(pc_from_depth_img_v2_xyz);
+
+            pcshow(pc_from_depth_img_v3.Location);
 
             % 깊이 이미지에서 값이 있는 부분만 필터링
-            % valid_points의 위치를 가져와서 depth_image의 값을 확인
+            % valid_points의 위치를 가져와서 depth_proj 값을 확인
             locations = valid_points.Location;
             
             % 유효한 점들의 인덱스 찾기
-            valid_indices = arrayfun(@(x, y) depth_image(round(y), round(x)) > 0, locations(:,1), locations(:,2));
+            valid_indices = arrayfun(@(x, y) depth_proj(round(y), round(x)) > 0, locations(:,1), locations(:,2));
             
             % 유효한 점들과 특징 필터링
             filtered_points = valid_points(valid_indices);
