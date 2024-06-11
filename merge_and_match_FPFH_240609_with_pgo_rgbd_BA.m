@@ -192,14 +192,16 @@ for scene_num = 3:3
     for i=1:length(scans)
         pc = scans{i};
         pcl = pointCloud(pc);
-        pcToView = pcdownsample(pcl,'random', 0.05);
+        %pcToView = pcdownsample(pcl, 0.5);
+        %pcToView = pcdownsample(pcl,'random', 0.5);
+        pcToView = myPcdownsample(pcl, 0.5);
         pcsToView{i} = pcToView;
     end
 
     % 변수 설정
     step = 1; % for문의 간격
     threshold = 100; % i와 j의 차이 임계값
-    SURF_threshold = 10; %낮으면 더 많이 검출
+    SURF_threshold = 1; %낮으면 더 많이 검출
     matching_ratio = 0.9; %높으면 더 많이 검출
 
     % 3D 포인트 클라우드를 저장할 빈 변수 생성
@@ -228,19 +230,81 @@ for scene_num = 3:3
             % compute 2D features
             rgb = rgbd(:, :, 1:3);
             grayImage = rgb2gray(rgb);
-            points = detectSURFFeatures(grayImage);
+
+
+            %RGB-D -> PointCloud 실패...
+            % % RGB-D 이미지의 깊이 채널을 가져오기
+            % [height, width, ~] = size(rgbd);
+            % % RGB-D 이미지의 깊이 채널을 가져오기
+            % % 이미지 크기 정의 (depth_image의 크기)
+            % image_height = 480;
+            % image_width = 400;
+            % 
+            % % 깊이 값을 가지는 행렬 초기화
+            % depth_values = double(rgbd(:, :, 4)) / 10 - 12.7;
+            % 
+            % % x와 y 좌표 행렬 생성
+            % [x, y] = meshgrid(1:image_width, 1:image_height);
+            % 
+            % % 모든 픽셀 좌표를 3D 공간 좌표로 변환
+            % pixels_2d = [x(:), y(:), ones(image_height * image_width, 1)];
+            % pixels_3d = pixels_2d / intrinsic';
+            % 
+            % % 깊이 값을 3D 좌표에 적용
+            % points_3d = pixels_3d .* depth_values(:);
+            % 
+            % % 유효한 깊이 값을 가진 포인트만 선택
+            % valid_points_mask = depth_values(:) > 0;
+            % valid_points_3d = points_3d(valid_points_mask, :);
+            % 
+            % % 포인트를 원래 좌표계로 변환
+            % pc2d = pctransform(pointCloud(valid_points_3d), invert(extrinsic_tform));
+            % 
+            % % 결과 포인트 클라우드
+            % result_point_cloud = pc2d.Location;
+            % 
+            % % 결과 확인
+            % pcshow(result_point_cloud);
+
+
+
+            points = detectSURFFeatures(grayImage, 'MetricThreshold', SURF_threshold, 'NumOctaves', 3, 'NumScaleLevels', 4);
             [rgb_features, valid_points] = extractFeatures(grayImage, points);
-            
+
+
+            % peak_thresh = 0.01; % Default is typically 0.04, lower it to detect more points
+            % edge_thresh = 15; % Default is 10, you can also adjust this if needed
+            % % Detect SIFT features with adjusted parameters
+            % points_SIFT = detectSIFTFeatures(grayImage, 'EdgeThresh', edge_thresh);
+            % % Extract features from the detected points
+            % [rgb_features_SIFT, valid_points_SIFT] = extractFeatures(grayImage, points_SIFT);
+                       
+
+            % Visualize the image
+            % imshow(grayImage);
+            % hold on;
+            % % Plot the detected points
+            % plot(valid_points.selectStrongest(100)); % 강한 특징점 100개를 선택하여 표시
+            % hold off;
+                        
             % compute 3D features
             % swap x and y
 
             % pc_work = scans{i+k};
-            pc_work = scans{i+k};
-
+            %pc_work = scans{i+k};
+           
             % inverse y axis
             % pc_work(:, 1) = -pc_work(:, 1);
 
-            ori_scan = pointCloud(pc_work);
+            %ori_scan = pointCloud(pc_work);
+
+            
+            
+            %jy
+            %voxelize추가
+            ori_scan = pcsToView{i+k}; %voxelize 된 상태
+
+
             % fpfh_features = computeFPFHFeatures(ori_scan, Radius=FPFH_Radius);
             fpfh_features = extractFPFHFeatures(ori_scan, Radius=FPFH_Radius);
 
@@ -270,7 +334,7 @@ for scene_num = 3:3
             % flip x and y
             depth_image = flip(depth_image, 1);
             depth_image = flip(depth_image, 2);
-            imshow(depth_image);
+            imshow(depth_image); %depth_image = point cloud를 image에 투영한 결과
             dense_depth = rgbd(:, :, 4);
 
             depth_mask = (depth_image ~= 0) & (dense_depth ~= 0);
@@ -289,8 +353,27 @@ for scene_num = 3:3
             fpfh_image = flip(fpfh_image, 1);
             fpfh_image = flip(fpfh_image, 2);
 
-            % select fpfh feature
-            fpfh_features = fpfh_features(valid_points.Location(:, 2), valid_points.Location(:, 1)); % fix from here
+
+
+
+            % 깊이 이미지에서 값이 있는 부분만 필터링
+            % valid_points의 위치를 가져와서 depth_image의 값을 확인
+            locations = valid_points.Location;
+            
+            % 유효한 점들의 인덱스 찾기
+            valid_indices = arrayfun(@(x, y) depth_image(round(y), round(x)) > 0, locations(:,1), locations(:,2));
+            
+            % 유효한 점들과 특징 필터링
+            filtered_points = valid_points(valid_indices);
+            filtered_rgb_features = rgb_features(valid_indices, :);
+
+            tt=1;
+
+
+
+            % select fpfh feature %fpfh_features = Nx33, N=2만개정도
+            %fpfh_features = fpfh_features(valid_points.Location(:, 2), valid_points.Location(:, 1)); % fix from here
+            %fpfh 특징치도 있으면서, 이미지 SURF 특징치도 있는 부분을 N,(33+64)
 
             % features = fpfh_features + rgb_features;
             features = rgb_features;
@@ -522,6 +605,9 @@ function [R_norm, T_norm] = computeNorms(tform)
     T_norm = norm(tform.Translation);
 end
 
+
+
+
 function FPFH_features = computeFPFHFeatures(newPointCloud, radius)
     % 초기화
     numPoints = newPointCloud.Count;
@@ -586,7 +672,7 @@ end
 
 function outpc = myPcdownsample(inpc, grid_size)
     loc = inpc.Location;
-    intensity = inpc.Intensity;
+    %intensity = inpc.Intensity;
     min_loc = min(loc);
     max_loc = max(loc);
 
@@ -599,7 +685,7 @@ function outpc = myPcdownsample(inpc, grid_size)
 
     numUnique = size(unique_grid_loc, 1);
     avg_loc = zeros(0, 3);  % 0x3 크기의 배열로 초기화
-    random_intensity = [];
+    %random_intensity = [];
 
     for i = 1:numUnique
         mask = (idx == i);
@@ -607,14 +693,47 @@ function outpc = myPcdownsample(inpc, grid_size)
         if any(mask)  % mask가 전부 false가 아닌 경우만 계산
             avg_loc = vertcat(avg_loc, mean(loc(mask, :), 1));
             % 해당 복셀 내의 intensity 값 중에서 랜덤하게 하나 선택
-            possible_intensities = intensity(mask);
-            random_intensity = vertcat(random_intensity, possible_intensities(randi(length(possible_intensities))));
+            %possible_intensities = intensity(mask);
+            %random_intensity = vertcat(random_intensity, possible_intensities(randi(length(possible_intensities))));
         end
     end
 
     % 새로운 pointCloud 객체 생성
-    outpc = pointCloud(avg_loc, 'Intensity', random_intensity);
+    outpc = pointCloud(avg_loc);
 end
+
+
+% function outpc = myPcdownsample(inpc, grid_size)
+%     loc = inpc.Location;
+%     intensity = inpc.Intensity;
+%     min_loc = min(loc);
+%     max_loc = max(loc);
+% 
+% 
+%     % 그리드 위치 계산
+%     grid_loc = floor((loc - min_loc) / grid_size) + 1;
+% 
+%     % 유일한 그리드 위치와 각 위치의 인덱스 계산
+%     [unique_grid_loc, ~, idx] = unique(grid_loc, 'rows', 'stable');
+% 
+%     numUnique = size(unique_grid_loc, 1);
+%     avg_loc = zeros(0, 3);  % 0x3 크기의 배열로 초기화
+%     random_intensity = [];
+% 
+%     for i = 1:numUnique
+%         mask = (idx == i);
+% 
+%         if any(mask)  % mask가 전부 false가 아닌 경우만 계산
+%             avg_loc = vertcat(avg_loc, mean(loc(mask, :), 1));
+%             % 해당 복셀 내의 intensity 값 중에서 랜덤하게 하나 선택
+%             possible_intensities = intensity(mask);
+%             random_intensity = vertcat(random_intensity, possible_intensities(randi(length(possible_intensities))));
+%         end
+%     end
+% 
+%     % 새로운 pointCloud 객체 생성
+%     outpc = pointCloud(avg_loc, 'Intensity', random_intensity);
+% end
 
 function mkdir_if_not_exist(folder)
     if ~exist(folder, 'dir')
